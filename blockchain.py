@@ -1,8 +1,11 @@
+import argparse
 import hashlib
 import json
-from textwrap import dedent
 from time import time
+from urllib.parse import urlparse
 from uuid import uuid4
+
+import requests
 from flask import Flask, jsonify, request
 
 
@@ -10,9 +13,73 @@ class Blockchain(object):
     def __init__(self):
         self.chain = []
         self.current_transactions = []
+        self.neigbouring_nodes = set()
 
         # Create the genesis block
         self.new_block(previous_hash=1, proof=100)
+
+    def register_node(self, address):
+        """
+        Add a new node to the network.
+
+        Arguments:
+            address {str} -- Address of the node to add. E.g. 'http://192.168.0.5:5000'
+        """
+
+        parsed_url = urlparse(address)
+        self.neigbouring_nodes.add(parsed_url.netloc)
+
+    def valid_chain(self, chain):
+        """
+        Determine if a given blockchain is valid.
+
+        Arguments:
+            chain {list} -- A list of blocks i.e. a blockchain.
+
+        Returns:
+            bool -- True if valid, else False.
+        """
+
+        last_block = chain[0]
+        for current_block in chain[1:]:
+            print(last_block)
+            print(current_block)
+            print('\n-----------\n')
+
+            # Check that the hash is correct
+            if current_block['previous_hash'] != self.hash(last_block):
+                return False
+
+            # Check that the proof of work is correct
+            if not self.valid_proof(last_block['proof'], current_block['proof']):
+                return False
+
+            last_block = current_block
+
+        return True
+
+    def resolve_conflicts(self):
+        """
+        The consensus algorithm. It resolves conflicts by replacing our chain with the longest one in the network.
+
+        Returns:
+            bool -- True if our chain was replaced, else False.
+        """
+
+        replaced = False
+        for node in self.neigbouring_nodes:
+            response = requests.get(f'http://{node}/chain')
+
+            if response.status_code == 200:
+                length = response.json()['length']
+                chain = response.json()['chain']
+
+                # Replace our own chain if we discover a neighbour with a valid longer one
+                if length > len(self.chain) and self.valid_chain(chain):
+                    self.chain = chain
+                    replaced = True
+
+        return replaced
 
     def new_block(self, proof, previous_hash=None):
         """
@@ -169,7 +236,7 @@ def new_transaction():
 
     # Create a new transaction
     index = blockchain.new_transaction(
-        values['sender'], values['recipient'], values[amount])
+        values['sender'], values['recipient'], values['amount'])
     response = {'message': f'Transaction will be added to block {index}'}
     return jsonify(response), 201
 
@@ -184,5 +251,42 @@ def full_chain():
     return jsonify(response), 200
 
 
+@app.route('/nodes/register', methods=['POST'])
+def register_nodes():
+    values = request.get_json()
+
+    nodes = values.get('nodes')
+    if nodes is None:
+        return 'Error: Please supply a valid list of nodes', 400
+
+    for node in nodes:
+        blockchain.register_node(node)
+
+    response = {
+        'message': 'New nodes have been added!!!',
+        'total_nodes': list(blockchain.neigbouring_nodes),
+    }
+
+    return jsonify(response), 201
+
+
+@app.route('/nodes/resolve', methods=['GET'])
+def consensus():
+    replaced = blockchain.resolve_conflicts()
+
+    response = {
+        'message': 'Our chain was replaced' if replaced else 'Our chain is authoritative',
+        'new_chain': blockchain.chain,
+    }
+
+    return jsonify(response), 200
+
+
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '--port', help='the port for this blockchain node to listen on')
+    args = parser.parse_args()
+    port = 5000 if not args.port else args.port
+
+    app.run(host='0.0.0.0', port=port)
