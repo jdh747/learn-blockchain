@@ -131,7 +131,31 @@ blockchain = Blockchain()
 
 @app.route('/mine', methods=['GET'])
 def mine():
-    return 'Mine a new block!!!'
+    # Run the proof-of-work algo to get the next nonce
+    last_block = blockchain.last_block
+    last_proof = last_block['proof']
+    current_proof = blockchain.proof_of_work(last_proof)
+
+    # Reward ourselves for finding the proof
+    blockchain.new_transaction(
+        sender='0',
+        recipient=node_identifier,
+        amount=1,
+    )
+
+    # Forge the new block by adding it to the chain
+    previous_hash = blockchain.hash(last_block)
+    block = blockchain.new_block(current_proof, previous_hash)
+
+    response = {
+        'message': 'New block forged!!!',
+        'index': block['index'],
+        'transactions': block['transactions'],
+        'proof': block['proof'],
+        'previous_hash': block['previous_hash'],
+    }
+
+    return jsonify(response), 200
 
 
 @app.route('/transactions/new', methods=['POST'])
@@ -144,7 +168,8 @@ def new_transaction():
         return f'Missing values.\nRequired:{required}, given:{values}', 400
 
     # Create a new transaction
-    index = blockchain.new_transaction(values['sender'], values['recipient'], values[amount])
+    index = blockchain.new_transaction(
+        values['sender'], values['recipient'], values[amount])
     response = {'message': f'Transaction will be added to block {index}'}
     return jsonify(response), 201
 
